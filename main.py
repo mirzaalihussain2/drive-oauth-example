@@ -1,3 +1,4 @@
+from dotenv import load_dotenv
 import os
 from click import prompt
 import flask
@@ -6,6 +7,8 @@ import requests
 import google.oauth2.credentials
 import google_auth_oauthlib.flow
 import googleapiclient.discovery
+
+load_dotenv()
 
 # The OAuth 2.0 access scope allows for access to the
 # authenticated user's account and requires requests to use an SSL connection.
@@ -190,13 +193,14 @@ def print_index_table():
           '</td></tr></table>')
 
 if __name__ == '__main__':
-    if os.environ.get('FLASK_ENV') == 'development':
+    debug = os.environ.get('FLASK_DEBUG') == '1'
+    if debug:
         # When running locally, disable OAuthlib's HTTPs verification.
         # ACTION ITEM for developers:
         #     When running in production *do not* leave this option enabled.
         os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
-    
+
         # This disables the requested scopes and granted scopes check.
         # If users only grant partial request, the warning would not be thrown.
-        os.environ['OAUTHLIB_RELAX_TOKEN_SCOPE'] = '1'    
-    app.run('localhost', 5000, debug=True)
+        os.environ['OAUTHLIB_RELAX_TOKEN_SCOPE'] = '1'
+    app.run('localhost', 5000, debug=debug)
