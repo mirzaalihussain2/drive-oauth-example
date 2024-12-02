@@ -1,12 +1,17 @@
+import calendar
 from dotenv import load_dotenv
 import os
 from click import prompt
 import flask
 import requests
+import pprint
+import datetime
 
 import google.oauth2.credentials
 import google_auth_oauthlib.flow
 import googleapiclient.discovery
+from googleapiclient.errors import HttpError
+from typing import TypedDict
 
 load_dotenv()
 
@@ -17,6 +22,72 @@ SCOPES = ['https://www.googleapis.com/auth/drive.metadata.readonly',
 
 app = flask.Flask(__name__)
 app.secret_key = os.environ.get('FLASK_SECRET_KEY')
+
+class CalendarEntry(TypedDict):
+    id: str
+    summary: str
+    description: str
+    deleted: bool
+    hidden: bool
+    selected: bool
+    timezone: str
+
+def buildCalendarService(credentials: google.oauth2.credentials.Credentials):
+    try:
+        service = googleapiclient.discovery.build("calendar", "v3", credentials=credentials)
+        return service
+    except HttpError as error:
+        print(f"An error occurred: {error}")
+
+def returnCalendarList(service) -> list[CalendarEntry]:
+    page_token = None
+    simple_calendar_list = []
+    while True:
+        calendar_list = service.calendarList().list(pageToken=page_token).execute()
+        simple_calendar_list.extend([{
+            'id': entry['id'],
+            'summary': entry.get('summaryOverride', entry['summary']),
+            'description': entry.get('description', ''),
+            'deleted': entry.get('deleted', False),
+            'hidden': entry.get('hidden', False),
+            'selected': entry.get('selected', False),
+            'timezone': entry.get('timeZone', '')
+        } for entry in calendar_list['items']])
+        page_token = calendar_list.get('nextPageToken')
+        if not page_token:
+            break
+    return simple_calendar_list
+
+def getEvents(calendarId: str, service):
+    page_token = None
+    events_list = []
+    while True:
+        events = service.events().list(calendarId=calendarId, pageToken=page_token).execute()
+        events_list.extend(events['items'])
+        page_token = events.get('nextPageToken')
+        if not page_token:
+            break
+    return events_list
+
+def selectCalendar(calendars: list[CalendarEntry]):
+    # Display calendars with index numbers
+    print("\nAvailable calendars:")
+    for i, calendar in enumerate(calendars, 1):
+        print(f"{i}. {calendar['summary']}")
+    
+    # Get user selection
+    while True:
+        try:
+            selection = int(input("\nSelect a calendar (enter the number): "))
+            if 1 <= selection <= len(calendars):
+                break
+            print("Invalid selection. Please try again.")
+        except ValueError:
+            print("Please enter a valid number.")
+    
+    # Return the calendar ID for the selected calendar
+    selected_calendar = calendars[selection - 1]
+    return selected_calendar['id']
 
 @app.route('/')
 def index():
@@ -60,10 +131,41 @@ def calendar_api_request():
     features = flask.session['features']
 
     if features['calendar']:
-        # User authorized Calendar read permission.
-        # Calling the APIs, etc.
-        return ('<p>User granted the Google Calendar read permission. '+
-            'This sample code does not include code to call Calendar</p>')
+        # Load credentials from the session.
+        credentials = google.oauth2.credentials.Credentials(
+            **flask.session['credentials']
+        )
+
+        service = buildCalendarService(credentials)
+        calendars = returnCalendarList(service)
+        selelected_calendar_id = selectCalendar(calendars)
+        events = getEvents(selelected_calendar_id, service)
+        
+        event_details = []
+        for event in events:
+            start = event['start']['dateTime']
+            end = event['end']['dateTime']
+            # start = event["start"].get("dateTime", event["start"].get("date"))
+            # end = event["end"].get("dateTime", event["end"].get("date"))
+            duration = None
+            if start and end:
+                print(f"START TYPE: {type(start)}")
+                print(f"START TIME: {start}")
+                print(f"END TYPE: {type(end)}")
+                print(f"END TIME: {end}")
+                
+                # start_dt = datetime.fromisoformat(start.replace('Z', '+00:00'))
+                # end_dt = datetime.fromisoformat(end.replace('Z', '+00:00'))
+                # duration = str(end_dt - start_dt)
+            event_details.append({
+                'summary': event.get('summary'),
+                'start': start,
+                'end': end,
+                # 'duration': duration
+            })
+            
+        return flask.jsonify(event_details)
+
     else:
         # User didn't authorize Calendar read permission.
         # Update UX and application accordingly
@@ -112,7 +214,7 @@ def oauth2callback():
     # ACTION ITEM: In a production app, you likely want to save these
     #              credentials in a persistent database instead.
     credentials = flow.credentials
-    
+
     credentials = credentials_to_dict(credentials)
     flask.session['credentials'] = credentials
     
@@ -148,6 +250,8 @@ def clear_credentials():
             print_index_table())
 
 def credentials_to_dict(credentials):
+    print("CREDS: ")
+    print(credentials.token_uri)
     return {
         'token': credentials.token,
         'refresh_token': credentials.refresh_token,
@@ -173,7 +277,7 @@ def check_granted_scopes(credentials):
 
 def print_index_table():
   return ('<table>' +
-          '<tr><td><a href="/drive">Test an API request</a></td>' +
+          '<tr><td><a href="/calendar">Test an API request</a></td>' +
           '<td>Submit an API request and see a formatted JSON response. ' +
           '    Go through the authorization flow if there are no stored ' +
           '    credentials for the user.</td></tr>' +
